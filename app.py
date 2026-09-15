@@ -48,12 +48,29 @@ def get_metadata(table_id: str) -> dict:
     return r.json()
 
 
+def variable_ids(meta: dict) -> list:
+    """SSBs metadata-endepunkt bruker IKKE en 'variables'-liste (det jeg antok
+    før), men samme JSON-stat2-struktur som selve dataene: en ordnet liste
+    'id' med variabelnavn, og detaljer i 'dimension'. Bekreftet mot SSBs egen
+    dokumentasjon (pxtools.net/PxWebApi)."""
+    return meta["id"]
+
+
+def ordered_codes(meta: dict, var_id: str) -> list:
+    """Returnerer [(kode, tekst), ...] for en variabel, i riktig rekkefølge
+    (category.index kan være usortert i selve JSON-en - se dokumentasjonen)."""
+    cat = meta["dimension"][var_id]["category"]
+    index = cat.get("index", {})
+    labels = cat.get("label", {})
+    codes = sorted(index, key=lambda k: index[k]) if isinstance(index, dict) else list(index)
+    return [(c, labels.get(c, c)) for c in codes]
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_table(table_id: str, tid_fra: str, region_pattern: str = AKERSHUS_REGION_PREFIX) -> dict:
     meta = get_metadata(table_id)
     params = {"lang": "no", "outputFormat": "json-stat2"}
-    for v in meta["variables"]:
-        vid = v["id"]
+    for vid in variable_ids(meta):
         if vid == "Region":
             params[f"valueCodes[{vid}]"] = region_pattern
         elif vid == "Tid":
@@ -109,10 +126,8 @@ with st.expander("Diagnostikk - sjekk dette FØRST", expanded=False):
     )
     try:
         meta = get_metadata("14172")
-        region_var = next(v for v in meta["variables"] if v["id"] == "Region")
-        koder = region_var.get("values", [])
-        navn = region_var.get("valueTexts", koder)
-        diag = pd.DataFrame({"kode": koder, "navn": navn})
+        par = ordered_codes(meta, "Region")
+        diag = pd.DataFrame(par, columns=["kode", "navn"])
         diag["akershus?"] = diag["kode"].str.startswith("032") | diag["navn"].str.contains(
             "|".join(AKERSHUS_REGION_KEYWORDS), case=False, na=False
         )
@@ -123,10 +138,9 @@ with st.expander("Diagnostikk - sjekk dette FØRST", expanded=False):
     except Exception as e:
         st.error(f"Klarte ikke hente metadata fra SSB: {e}")
         st.info(
-            "Vanligste årsak: du kjører i en nettleser-basert Python-playground "
-            "(f.eks. streamlit.io/playground) som ikke kan gjøre ekte nettverkskall "
-            "til eksterne API-er (CORS-begrensning). Prøv appen på Streamlit "
-            "Community Cloud i stedet - se steg-for-steg-forklaringen i chatten."
+            "Sjekk at tabellnummeret finnes og at nettverkstilgang virker - "
+            "prøv å åpne https://data.ssb.no/api/pxwebapi/v2/tables/14172/metadata?lang=no "
+            "direkte i nettleseren for å se rå-svaret fra SSB."
         )
         st.stop()
 
@@ -144,10 +158,10 @@ try:
 except Exception as e:
     st.error(f"Klarte ikke hente «{valgt_tabell}» fra SSB: {e}")
     st.info(
-        "Vanligste årsaker: (1) nettleser-CORS i en playground uten ekte "
-        "Python-server - se diagnostikk-boksen over, eller (2) perioden for "
-        "denne tabellen er årlig, ikke månedlig - juster 'tid_fra' i "
-        f"TABELLER-oppslaget for '{valgt_tabell}' til f.eks. '2022' uten måned."
+        "Vanligste årsak: perioden for denne tabellen er årlig, ikke månedlig "
+        f"(eller omvendt) - juster 'tid_fra' i TABELLER-oppslaget for "
+        f"'{valgt_tabell}' til f.eks. '2022' uten måned. Sjekk også "
+        f"diagnostikk-boksen øverst for å se om SSB svarer i det hele tatt."
     )
     st.stop()
 
@@ -234,3 +248,4 @@ st.download_button(
     filtrert.to_csv(index=False).encode("utf-8"),
     file_name=f"{valgt_tabell.lower().replace(' ', '_').replace('æ','ae').replace('ø','oe').replace('å','aa')}.csv",
 )
+
